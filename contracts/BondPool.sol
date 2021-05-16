@@ -30,7 +30,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     _pancakeRouter = IPancakeRouterLike(pancakeRouter);
     _treasury = treasury;
 
-    emit TreasuryUpdated(address(0), 0x0900B4DeedEb28d61F41C54549CD8cd6FDd637bc);
+    emit TreasuryUpdated(address(0), treasury);
   }
 
   /**
@@ -38,9 +38,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
    * @param token The token address to get the information
    * @param account Enter your account address to get the information
    * @param poolTotalNepPaired Returns the total amount of NEP paired with the given token
-   * @param totalNepPaired Returns the total amount of NEP pair in all pools
    * @param totalLocked Returns the total amount of the token locked/staked in this pool
-   * @param maxStake Returns the maximum amount of tokens that can be locked in this pool
    * @param totalLiquidity Returns the sum of liquidity (PancakeSwap LP token) locked in this pool
    * @param releaseDate Returns the release date of the sender (if any bond)
    * @param nepAmount Returns the sender's amount of NEP reward that was bonded with the suppplied token
@@ -53,9 +51,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     override
     returns (
       uint256 poolTotalNepPaired,
-      uint256 totalNepPaired,
       uint256 totalLocked,
-      uint256 maxStake,
       uint256 totalLiquidity,
       uint256 releaseDate,
       uint256 nepAmount,
@@ -63,10 +59,8 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
       uint256 liquidity
     )
   {
-    totalNepPaired = _totalNepPaired;
     poolTotalNepPaired = _pool[token].totalNepPaired;
     totalLocked = _pool[token].totalLocked;
-    maxStake = _pool[token].maxStake;
     totalLiquidity = _pool[token].totalLiquidity;
 
     releaseDate = _bonds[account][token].releaseDate;
@@ -91,6 +85,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
    * @dev Adds or updates bond pairs for this pool
    *
    * @param token Provide the liquidity token address to bond with NEP
+   * @param pancakePair Provide the pair address of the liquidity token/NEP
    * @param name Provide a name of this bond
    * @param maxStake The maximum cap of total tokens that can be staked to create bond
    * @param minBond Minimum bond amount
@@ -102,6 +97,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
    */
   function addOrUpdatePair(
     address token,
+    IPancakePairLike pancakePair,
     string memory name,
     uint256 maxStake,
     uint256 minBond,
@@ -124,6 +120,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     Pair memory pair;
 
     pair.name = name;
+    pair.pancakePair = pancakePair;
     pair.maxStake = maxStake;
     pair.minBond = minBond;
     pair.entryFee = entryFee;
@@ -284,11 +281,13 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
       address(_nepToken),
       bondToken,
       _bonds[super._msgSender()][bondToken].liquidity,
-      _bonds[super._msgSender()][bondToken].nepAmount,
-      _bonds[super._msgSender()][bondToken].bondTokenAmount,
-      address(this),
+      0,
+      0,
+      super._msgSender(),
       block.timestamp.add(1 hours) // solhint-disable-line
     );
+
+    emit BondReleased(bondToken, nepTokenAmount, bondTokenAmount, _bonds[super._msgSender()][bondToken].liquidity);
   }
 
   /**
@@ -316,18 +315,10 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     uint256 nepTokenAmount;
     uint256 bondTokenAmount;
 
+    _pool[bondToken].pancakePair.approve(address(_pancakeRouter), _bonds[super._msgSender()][bondToken].liquidity);
+
     if (exitFee == 0) {
       _releaseBondToSender(bondToken);
-
-      emit BondReleased(
-        bondToken,
-        _bonds[super._msgSender()][bondToken].nepAmount,
-        _bonds[super._msgSender()][bondToken].bondTokenAmount,
-        nepTokenAmount,
-        bondTokenAmount,
-        _bonds[super._msgSender()][bondToken].liquidity
-      );
-
       _finalize(bondToken);
       return;
     }
@@ -336,8 +327,8 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
       address(_nepToken),
       bondToken,
       _bonds[super._msgSender()][bondToken].liquidity,
-      _bonds[super._msgSender()][bondToken].nepAmount,
-      _bonds[super._msgSender()][bondToken].bondTokenAmount,
+      0,
+      0,
       address(this),
       block.timestamp.add(1 hours) // solhint-disable-line
     );
@@ -359,13 +350,6 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
 
     _finalize(bondToken);
 
-    emit BondReleased(
-      bondToken,
-      _bonds[super._msgSender()][bondToken].nepAmount,
-      _bonds[super._msgSender()][bondToken].bondTokenAmount,
-      nepTokenAmount,
-      bondTokenAmount,
-      _bonds[super._msgSender()][bondToken].liquidity
-    );
+    emit BondReleased(bondToken, nepTokenAmount, bondTokenAmount, _bonds[super._msgSender()][bondToken].liquidity);
   }
 }

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity >=0.4.22 <0.9.0;
+import "./IPancakePairLike.sol";
 
 interface IBondPool {
   struct Pair {
     address[] path;
     string name;
+    IPancakePairLike pancakePair;
     uint256 maxStake;
     uint256 minBond;
     uint256 entryFee; // Percentage value: upto 4 decimal places, x10000. For example: 25000 means 2.5%
@@ -25,16 +27,14 @@ interface IBondPool {
 
   event PairUpdated(address indexed token, string name, uint256 maxStake, uint256 minBond, uint256 entryFee, uint256 exitFee, uint256 lockingPeriod, uint256 amount);
   event BondCreated(address indexed bondToken, uint256 nepStaked, uint256 bondTokenStaked, uint256 liquidity);
-  event BondReleased(address indexed bondToken, uint256 nepStaked, uint256 bondTokenStaked, uint256 nepReleased, uint256 bondTokenReleased, uint256 liquidity);
+  event BondReleased(address indexed bondToken, uint256 nepReleased, uint256 bondTokenReleased, uint256 liquidity);
 
   /**
    * @dev Gets the bond market information information
    * @param token The token address to get the information
    * @param account Enter your account address to get the information
    * @param poolTotalNepPaired Returns the total amount of NEP paired with the given token
-   * @param totalNepPaired Returns the total amount of NEP pair in all pools
    * @param totalLocked Returns the total amount of the token locked/staked in this pool
-   * @param maxStake Returns the maximum amount of tokens that can be locked in this pool
    * @param totalLiquidity Returns the sum of liquidity (PancakeSwap LP token) locked in this pool
    * @param releaseDate Returns the release date of the sender (if any bond)
    * @param nepAmount Returns the sender's amount of NEP reward that was bonded with the suppplied token
@@ -46,9 +46,7 @@ interface IBondPool {
     view
     returns (
       uint256 poolTotalNepPaired,
-      uint256 totalNepPaired,
       uint256 totalLocked,
-      uint256 maxStake,
       uint256 totalLiquidity,
       uint256 releaseDate,
       uint256 nepAmount,
@@ -74,6 +72,7 @@ interface IBondPool {
    * @dev Adds or updates bond pairs for this pool
    *
    * @param token Provide the liquidity token address to bond with NEP
+   * @param pancakePair Provide the pair address of the liquidity token/NEP
    * @param name Provide a name of this bond
    * @param maxStake The maximum cap of total tokens that can be staked to create bond
    * @param minBond Minimum bond amount
@@ -85,6 +84,7 @@ interface IBondPool {
    */
   function addOrUpdatePair(
     address token,
+    IPancakePairLike pancakePair,
     string memory name,
     uint256 maxStake,
     uint256 minBond,
