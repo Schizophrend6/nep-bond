@@ -30,7 +30,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     _pancakeRouter = IPancakeRouterLike(pancakeRouter);
     _treasury = treasury;
 
-    emit TreasuryUpdated(address(0), 0x0900B4DeedEb28d61F41C54549CD8cd6FDd637bc);
+    emit TreasuryUpdated(address(0), treasury);
   }
 
   /**
