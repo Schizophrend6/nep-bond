@@ -4,7 +4,6 @@ import "./IPancakePairLike.sol";
 
 interface IBondPool {
   struct Pair {
-    address[] path;
     string name;
     IPancakePairLike pancakePair;
     uint256 maxStake;

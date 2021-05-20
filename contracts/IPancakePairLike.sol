@@ -5,10 +5,6 @@ pragma solidity >=0.4.22 <0.9.0;
 interface IPancakePairLike {
   function token0() external view returns (address);
 
-  function token1() external view returns (address);
-
-  function totalSupply() external view returns (uint256);
-
   function approve(address spender, uint256 value) external returns (bool);
 
   function transfer(address to, uint256 value) external returns (bool);
