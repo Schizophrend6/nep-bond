@@ -29,6 +29,11 @@ interface IBondPool {
   event BondReleased(address indexed bondToken, uint256 nepReleased, uint256 bondTokenReleased, uint256 liquidity);
 
   /**
+   * @dev Gets the total number of NEP allocated to be distributed as reward
+   */
+  function _totalRewardAllocation() external view returns (uint256);
+
+  /**
    * @dev Gets the bond market information information
    * @param token The token address to get the information
    * @param account Enter your account address to get the information

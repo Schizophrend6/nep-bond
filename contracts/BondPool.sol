@@ -14,6 +14,8 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
 
   mapping(address => mapping(address => Bond)) public _bonds; // account -> bond token --> liquidity
   mapping(address => Pair) public _pool;
+
+  uint256 public override _totalRewardAllocation;
   uint256 public _totalNepPaired;
   address public _treasury;
 
@@ -111,6 +113,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     require(maxStake > 0, "Invalid maximum stake amount");
 
     if (amount > 0) {
+      _totalRewardAllocation = _totalRewardAllocation.add(amount);
       _nepToken.safeTransferFrom(super._msgSender(), address(this), amount);
     }
 
@@ -247,7 +250,6 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     uint256 entryFee
   ) private {
     IERC20(bondToken).safeTransferFrom(super._msgSender(), address(this), bondTokenAmount);
-
     _nepToken.approve(address(_pancakeRouter), nepAmount);
     IERC20(bondToken).approve(address(_pancakeRouter), bondTokenAmount.sub(entryFee));
   }
