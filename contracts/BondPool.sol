@@ -383,11 +383,11 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     _finalize(bondToken);
   }
 
-  function pause() external onlyOwner {
+  function pause() external onlyOwner whenNotPaused {
     super._pause();
   }
 
-  function unpause() external onlyOwner {
+  function unpause() external onlyOwner whenPaused {
     super._unpause();
   }
 }
