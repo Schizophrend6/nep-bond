@@ -250,6 +250,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     uint256 entryFee
   ) private {
     IERC20(bondToken).safeTransferFrom(super._msgSender(), address(this), bondTokenAmount);
+
     _nepToken.approve(address(_pancakeRouter), nepAmount);
     IERC20(bondToken).approve(address(_pancakeRouter), bondTokenAmount.sub(entryFee));
   }
@@ -271,34 +272,17 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     uint256 minNep,
     uint256 txDeadline
   ) external override nonReentrant {
+    require(bondTokenAmount > 0, "Invalid bond amount");
+    require(nepAmount > 0, "Invalid desired NEP amount");
+
     (uint256 lockingPeriod, uint256 entryFee) = this.getCreateBondInfo(super._msgSender(), bondToken, bondTokenAmount, nepAmount);
 
     _approveAndTransfer(bondToken, bondTokenAmount, nepAmount, entryFee);
     _addLiquidity(bondToken, bondTokenAmount.sub(entryFee), nepAmount, minNep, lockingPeriod, txDeadline);
 
-    IERC20(bondToken).safeTransfer(_treasury, entryFee);
-  }
-
-  /**
-   * @dev Removes and transfers all bond liquidity of the sender.
-   * Liquidity means the original bond token amount, minus fees, plus NEP token rewards, plus PancakeSwap LP fees.
-   *
-   * @param bondToken Provide the address of the bond token to release to the sender.
-   * @param nepTokenAmount The NEP token amount to release.
-   * @param bondTokenAmount The bond token amount to release.
-   */
-  function _releaseBondToSender(address bondToken) private returns (uint256 nepTokenAmount, uint256 bondTokenAmount) {
-    (nepTokenAmount, bondTokenAmount) = _pancakeRouter.removeLiquidity(
-      address(_nepToken),
-      bondToken,
-      _bonds[super._msgSender()][bondToken].liquidity,
-      0,
-      0,
-      super._msgSender(),
-      block.timestamp.add(1 hours) // solhint-disable-line
-    );
-
-    emit BondReleased(bondToken, nepTokenAmount, bondTokenAmount, _bonds[super._msgSender()][bondToken].liquidity);
+    if (entryFee > 0) {
+      IERC20(bondToken).safeTransfer(_treasury, entryFee);
+    }
   }
 
   /**
@@ -306,12 +290,81 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
    * @param bondToken Enter the bond liquidity token address.
    */
   function _finalize(address bondToken) private {
-    _pool[bondToken].totalLiquidity = _pool[bondToken].totalLiquidity.sub(_bonds[super._msgSender()][bondToken].liquidity);
+    uint256 holdersLiquidity = _bonds[super._msgSender()][bondToken].liquidity;
+    uint256 totalLiquidity = _pool[bondToken].totalLiquidity;
 
+    _pool[bondToken].totalLiquidity = totalLiquidity.sub(holdersLiquidity);
     _bonds[super._msgSender()][bondToken].releaseDate = 0;
     _bonds[super._msgSender()][bondToken].nepAmount = 0;
     _bonds[super._msgSender()][bondToken].bondTokenAmount = 0;
     _bonds[super._msgSender()][bondToken].liquidity = 0;
+  }
+
+  /**
+   * @dev Removes and transfers all bond liquidity of the sender.
+   * Liquidity means the original bond token amount, minus fees, plus NEP token rewards, plus PancakeSwap LP fees.
+   *
+   * @param bondToken Provide the address of the bond token to release to the sender.
+   */
+  function _releaseBondToSender(address bondToken) private {
+    (uint256 nepTokenAmount, uint256 bondTokenAmount) =
+      _pancakeRouter.removeLiquidity(
+        address(_nepToken),
+        bondToken,
+        _bonds[super._msgSender()][bondToken].liquidity,
+        0,
+        0,
+        super._msgSender(),
+        block.timestamp.add(1 hours) // solhint-disable-line
+      );
+
+    emit BondReleased(bondToken, nepTokenAmount, bondTokenAmount, _bonds[super._msgSender()][bondToken].liquidity);
+  }
+
+  /**
+   * @dev Removes and transfers all bond liquidity of the sender, deducting fees.
+   * Liquidity means the original bond token amount, minus fees, plus NEP token rewards, plus PancakeSwap LP fees.
+   *
+   * @param bondToken Provide the address of the bond token to release to the sender.
+   */
+  function _releaseBondToSenderDeductingFees(address bondToken, uint256 exitFee) private {
+    (uint256 nepTokenAmount, uint256 bondTokenAmount) =
+      _pancakeRouter.removeLiquidity(
+        address(_nepToken),
+        bondToken,
+        _bonds[super._msgSender()][bondToken].liquidity,
+        0,
+        0,
+        address(this),
+        block.timestamp.add(1 hours) // solhint-disable-line
+      );
+
+    uint256 bondTokenTransferAmount = bondTokenAmount.mul(1000000 - exitFee).div(1000000);
+    uint256 nepTokenTransferAmount = nepTokenAmount.mul(1000000 - exitFee).div(1000000);
+
+    /**
+     * Transfer both tokens (minus exit fee) to the sender.
+     */
+    if (bondTokenTransferAmount > 0) {
+      IERC20(bondToken).safeTransfer(super._msgSender(), bondTokenTransferAmount);
+    }
+
+    if (nepTokenTransferAmount > 0) {
+      _nepToken.safeTransfer(super._msgSender(), nepTokenTransferAmount);
+    }
+
+    /**
+     * Transfer the exit fee to the treasury.
+     */
+    if (bondTokenAmount.sub(bondTokenTransferAmount) > 0) {
+      IERC20(bondToken).safeTransfer(_treasury, bondTokenAmount.sub(bondTokenTransferAmount));
+    }
+
+    if (nepTokenAmount.sub(nepTokenTransferAmount) > 0) {
+      _nepToken.safeTransfer(_treasury, nepTokenAmount.sub(nepTokenTransferAmount));
+    }
+
+    emit BondReleased(bondToken, nepTokenAmount, bondTokenAmount, _bonds[super._msgSender()][bondToken].liquidity);
   }
 
   /**
@@ -323,45 +376,11 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     require(_bonds[super._msgSender()][bondToken].liquidity > 0, "Nothing to withdraw");
 
     uint256 exitFee = _bonds[super._msgSender()][bondToken].exitFee;
-    uint256 nepTokenAmount;
-    uint256 bondTokenAmount;
 
     _pool[bondToken].pancakePair.approve(address(_pancakeRouter), _bonds[super._msgSender()][bondToken].liquidity);
 
-    if (exitFee == 0) {
-      _releaseBondToSender(bondToken);
-      _finalize(bondToken);
-      return;
-    }
-
-    (nepTokenAmount, bondTokenAmount) = _pancakeRouter.removeLiquidity(
-      address(_nepToken),
-      bondToken,
-      _bonds[super._msgSender()][bondToken].liquidity,
-      0,
-      0,
-      address(this),
-      block.timestamp.add(1 hours) // solhint-disable-line
-    );
-
-    uint256 bondTokenTransferAmount = bondTokenAmount.mul(1000000 - exitFee).div(1000000);
-    uint256 nepTokenTransferAmount = nepTokenAmount.mul(1000000 - exitFee).div(1000000);
-
-    /**
-     * Transfer both tokens (minus exit fee) to the sender.
-     */
-    IERC20(bondToken).safeTransfer(super._msgSender(), bondTokenTransferAmount);
-    _nepToken.safeTransfer(super._msgSender(), nepTokenTransferAmount);
-
-    /**
-     * Transfer the exit fee to the treasury.
-     */
-    IERC20(bondToken).safeTransfer(_treasury, bondTokenAmount.sub(bondTokenTransferAmount));
-    _nepToken.safeTransfer(_treasury, nepTokenAmount.sub(nepTokenTransferAmount));
-
+    exitFee == 0 ? _releaseBondToSender(bondToken) : _releaseBondToSenderDeductingFees(bondToken, exitFee);
     _finalize(bondToken);
-
-    emit BondReleased(bondToken, nepTokenAmount, bondTokenAmount, _bonds[super._msgSender()][bondToken].liquidity);
   }
 
   function pause() external onlyOwner {
