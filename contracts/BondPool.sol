@@ -17,6 +17,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
 
   uint256 public override _totalRewardAllocation;
   uint256 public _totalNepPaired;
+  mapping(address => mapping(address => uint256)) public _myNepRewards; // account --> bond token --> reward total
   address public _treasury;
 
   event TreasuryUpdated(address indexed previous, address indexed current);
@@ -37,39 +38,28 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
   }
 
   /**
-   * @dev Gets the bond market information information
+   * @dev Gets the summary of the Cake Farm
    * @param token The token address to get the information
-   * @param account Enter your account address to get the information
-   * @param poolTotalNepPaired Returns the total amount of NEP paired with the given token
-   * @param totalLocked Returns the total amount of the token locked/staked in this pool
-   * @param totalLiquidity Returns the sum of liquidity (PancakeSwap LP token) locked in this pool
-   * @param releaseDate Returns the release date of the sender (if any bond)
-   * @param nepAmount Returns the sender's amount of NEP reward that was bonded with the suppplied token
-   * @param bondTokenAmount Returns the sender's token amount that was bonded with NEP
-   * @param liquidity Returns the sender's liquidity that was created and locked in the PancakeSwap exchange
+   * @param account Account to obtain summary of
+   * @param values[0] poolTotalNepPaired Returns the total amount of NEP paired with the given token
+   * @param values[1] totalLocked Returns the total amount of the token locked/staked in this pool
+   * @param values[2] releaseDate Returns the release date of the account (if any bond)
+   * @param values[3] nepAmount Returns the account's active NEP reward that was bonded with the suppplied token
+   * @param values[4] bondTokenAmount Returns the accounts's token amount that was bonded with NEP
+   * @param values[5] liquidity Returns the account's liquidity that was created and locked in the PancakeSwap exchange
+   * @param values[6] myNepRewards Returns the account's sum total NEP reward in this pool
    */
-  function getInfo(address token, address account)
-    external
-    view
-    override
-    returns (
-      uint256 poolTotalNepPaired,
-      uint256 totalLocked,
-      uint256 totalLiquidity,
-      uint256 releaseDate,
-      uint256 nepAmount,
-      uint256 bondTokenAmount,
-      uint256 liquidity
-    )
-  {
-    poolTotalNepPaired = _pool[token].totalNepPaired;
-    totalLocked = _pool[token].totalLocked;
-    totalLiquidity = _pool[token].totalLiquidity;
+  function getInfo(address token, address account) external view override returns (uint256[] memory values) {
+    values = new uint256[](7);
 
-    releaseDate = _bonds[account][token].releaseDate;
-    nepAmount = _bonds[account][token].nepAmount;
-    bondTokenAmount = _bonds[account][token].bondTokenAmount;
-    liquidity = _bonds[account][token].liquidity;
+    values[0] = _pool[token].totalNepPaired;
+    values[1] = _pool[token].totalLocked;
+
+    values[2] = _bonds[account][token].releaseDate;
+    values[3] = _bonds[account][token].nepAmount;
+    values[4] = _bonds[account][token].bondTokenAmount;
+    values[5] = _bonds[account][token].liquidity;
+    values[6] = _myNepRewards[account][token]; // myNepRewards
   }
 
   /**
@@ -117,17 +107,17 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
       _nepToken.safeTransferFrom(super._msgSender(), address(this), amount);
     }
 
-    Pair memory pair;
+    _pool[token].name = name;
 
-    pair.name = name;
-    pair.pancakePair = pancakePair;
-    pair.maxStake = maxStake;
-    pair.minBond = minBond;
-    pair.entryFee = entryFee;
-    pair.exitFee = exitFee;
-    pair.lockingPeriod = lockingPeriod;
+    if (address(pancakePair) != address(0)) {
+      _pool[token].pancakePair = pancakePair;
+    }
 
-    _pool[token] = pair;
+    _pool[token].maxStake = maxStake;
+    _pool[token].minBond = minBond;
+    _pool[token].entryFee = entryFee;
+    _pool[token].exitFee = exitFee;
+    _pool[token].lockingPeriod = lockingPeriod;
 
     emit PairUpdated(token, name, maxStake, minBond, entryFee, exitFee, lockingPeriod, amount);
   }
@@ -226,6 +216,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     _bonds[super._msgSender()][bondToken].liquidity = _bonds[super._msgSender()][bondToken].liquidity.add(liquidity);
 
     _totalNepPaired = _totalNepPaired.add(nepStaked);
+    _myNepRewards[super._msgSender()][bondToken] = _myNepRewards[super._msgSender()][bondToken].add(nepStaked);
 
     _pool[bondToken].totalLocked = _pool[bondToken].totalLocked.add(finalAmount);
     _pool[bondToken].totalNepPaired = _pool[bondToken].totalNepPaired.add(_totalNepPaired);
@@ -271,7 +262,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     uint256 nepAmount,
     uint256 minNep,
     uint256 txDeadline
-  ) external override nonReentrant {
+  ) external override whenNotPaused nonReentrant {
     require(bondTokenAmount > 0, "Invalid bond amount");
     require(nepAmount > 0, "Invalid desired NEP amount");
 
@@ -307,18 +298,10 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
    * @param bondToken Provide the address of the bond token to release to the sender.
    */
   function _releaseBondToSender(address bondToken) private {
-    (uint256 nepTokenAmount, uint256 bondTokenAmount) =
-      _pancakeRouter.removeLiquidity(
-        address(_nepToken),
-        bondToken,
-        _bonds[super._msgSender()][bondToken].liquidity,
-        0,
-        0,
-        super._msgSender(),
-        block.timestamp.add(1 hours) // solhint-disable-line
-      );
+    uint256 liquidity = _bonds[super._msgSender()][bondToken].liquidity;
 
-    emit BondReleased(bondToken, nepTokenAmount, bondTokenAmount, _bonds[super._msgSender()][bondToken].liquidity);
+    _pool[bondToken].pancakePair.transfer(super._msgSender(), liquidity);
+    emit BondReleased(bondToken, liquidity);
   }
 
   /**
@@ -328,43 +311,20 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
    * @param bondToken Provide the address of the bond token to release to the sender.
    */
   function _releaseBondToSenderDeductingFees(address bondToken, uint256 exitFee) private {
-    (uint256 nepTokenAmount, uint256 bondTokenAmount) =
-      _pancakeRouter.removeLiquidity(
-        address(_nepToken),
-        bondToken,
-        _bonds[super._msgSender()][bondToken].liquidity,
-        0,
-        0,
-        address(this),
-        block.timestamp.add(1 hours) // solhint-disable-line
-      );
+    uint256 liquidity = _bonds[super._msgSender()][bondToken].liquidity;
+    uint256 fees = liquidity.mul(1000000 - exitFee).div(1000000);
+    uint256 released = liquidity.sub(fees);
 
-    uint256 bondTokenTransferAmount = bondTokenAmount.mul(1000000 - exitFee).div(1000000);
-    uint256 nepTokenTransferAmount = nepTokenAmount.mul(1000000 - exitFee).div(1000000);
-
-    /**
-     * Transfer both tokens (minus exit fee) to the sender.
-     */
-    if (bondTokenTransferAmount > 0) {
-      IERC20(bondToken).safeTransfer(super._msgSender(), bondTokenTransferAmount);
+    if (released > 0) {
+      _pool[bondToken].pancakePair.transfer(super._msgSender(), released);
     }
 
-    if (nepTokenTransferAmount > 0) {
-      _nepToken.safeTransfer(super._msgSender(), nepTokenTransferAmount);
+    // Transfer the exit fee to the treasury
+    if (fees > 0) {
+      _pool[bondToken].pancakePair.transfer(_treasury, fees);
     }
 
-    /**
-     * Transfer the exit fee to the treasury.
-     */
-    if (bondTokenAmount.sub(bondTokenTransferAmount) > 0) {
-      IERC20(bondToken).safeTransfer(_treasury, bondTokenAmount.sub(bondTokenTransferAmount));
-    }
-
-    if (nepTokenAmount.sub(nepTokenTransferAmount) > 0) {
-      _nepToken.safeTransfer(_treasury, nepTokenAmount.sub(nepTokenTransferAmount));
-    }
-
-    emit BondReleased(bondToken, nepTokenAmount, bondTokenAmount, _bonds[super._msgSender()][bondToken].liquidity);
+    emit BondReleased(bondToken, _bonds[super._msgSender()][bondToken].liquidity);
   }
 
   /**
@@ -376,8 +336,6 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     require(_bonds[super._msgSender()][bondToken].liquidity > 0, "Nothing to withdraw");
 
     uint256 exitFee = _bonds[super._msgSender()][bondToken].exitFee;
-
-    _pool[bondToken].pancakePair.approve(address(_pancakeRouter), _bonds[super._msgSender()][bondToken].liquidity);
 
     exitFee == 0 ? _releaseBondToSender(bondToken) : _releaseBondToSenderDeductingFees(bondToken, exitFee);
     _finalize(bondToken);

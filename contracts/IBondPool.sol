@@ -26,7 +26,7 @@ interface IBondPool {
 
   event PairUpdated(address indexed token, string name, uint256 maxStake, uint256 minBond, uint256 entryFee, uint256 exitFee, uint256 lockingPeriod, uint256 amount);
   event BondCreated(address indexed bondToken, uint256 nepStaked, uint256 bondTokenStaked, uint256 liquidity);
-  event BondReleased(address indexed bondToken, uint256 nepReleased, uint256 bondTokenReleased, uint256 liquidity);
+  event BondReleased(address indexed bondToken, uint256 liquidity);
 
   /**
    * @dev Gets the total number of NEP allocated to be distributed as reward
@@ -37,26 +37,15 @@ interface IBondPool {
    * @dev Gets the bond market information information
    * @param token The token address to get the information
    * @param account Enter your account address to get the information
-   * @param poolTotalNepPaired Returns the total amount of NEP paired with the given token
-   * @param totalLocked Returns the total amount of the token locked/staked in this pool
-   * @param totalLiquidity Returns the sum of liquidity (PancakeSwap LP token) locked in this pool
-   * @param releaseDate Returns the release date of the sender (if any bond)
-   * @param nepAmount Returns the sender's amount of NEP reward that was bonded with the suppplied token
-   * @param bondTokenAmount Returns the sender's token amount that was bonded with NEP
-   * @param liquidity Returns the sender's liquidity that was created and locked in the PancakeSwap exchange
+   * @param values[0] poolTotalNepPaired Returns the total amount of NEP paired with the given token
+   * @param values[1] totalLocked Returns the total amount of the token locked/staked in this pool
+   * @param values[2] releaseDate Returns the release date of the account (if any bond)
+   * @param values[3] nepAmount Returns the account's active NEP reward that was bonded with the suppplied token
+   * @param values[4] bondTokenAmount Returns the accounts's token amount that was bonded with NEP
+   * @param values[5] liquidity Returns the account's liquidity that was created and locked in the PancakeSwap exchange
+   * @param values[6] myNepRewards Returns the account's sum total NEP reward in this pool
    */
-  function getInfo(address token, address account)
-    external
-    view
-    returns (
-      uint256 poolTotalNepPaired,
-      uint256 totalLocked,
-      uint256 totalLiquidity,
-      uint256 releaseDate,
-      uint256 nepAmount,
-      uint256 bondTokenAmount,
-      uint256 liquidity
-    );
+  function getInfo(address token, address account) external view returns (uint256[] memory values);
 
   /**
    * @dev Gets the bond creation information
