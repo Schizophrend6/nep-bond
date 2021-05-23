@@ -11,6 +11,9 @@ library NTransferUtilV1 {
     address recipient,
     uint256 amount
   ) public {
+    require(recipient != address(0), "Invalid recipient");
+    require(amount > 0, "Invalid transfer amount");
+
     uint256 pre = malicious.balanceOf(recipient);
     malicious.transfer(recipient, amount);
     uint256 post = malicious.balanceOf(recipient);
@@ -24,6 +27,9 @@ library NTransferUtilV1 {
     address recipient,
     uint256 amount
   ) public {
+    require(recipient != address(0), "Invalid recipient");
+    require(amount > 0, "Invalid transfer amount");
+
     uint256 pre = malicious.balanceOf(recipient);
     malicious.transferFrom(sender, recipient, amount);
     uint256 post = malicious.balanceOf(recipient);
