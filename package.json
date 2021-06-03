@@ -6,9 +6,21 @@
   "directories": {
     "test": "test"
   },
+  "standard": {
+    "env": [
+      "mocha"
+    ],
+    "global": [
+      "contract",
+      "artifacts",
+      "web3"
+    ]
+  },
   "scripts": {
     "test": "truffle test",
-    "flatten": "truffle-flattener ./contracts/BondPool.sol > ./contracts/.BondPool.flat.sol"
+    "flatten": "flatsol ./contracts/BondPool.sol > ./.flatsol/BondPool.sol",
+    "flatten:library": "flatsol ./contracts/Libraries/NTransferUtilV1.sol > ./.flatsol/NTransferUtilV1.sol",
+    "slither": "slither ."
   },
   "repository": {
     "type": "git",
@@ -28,7 +40,6 @@
     "openzeppelin-solidity": "^4.1.0",
     "prettier": "^2.2.1",
     "prettier-plugin-solidity": "*",
-    "standard": "^16.0.3",
-    "truffle-flattener": "^1.5.0"
+    "standard": "^16.0.3"
   }
 }

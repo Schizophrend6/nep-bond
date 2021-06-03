@@ -15,7 +15,9 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
   mapping(address => mapping(address => Bond)) public _bonds; // account -> bond token --> liquidity
   mapping(address => Pair) public _pool;
 
+  bool public _migrationComplete = false;
   uint256 public override _totalRewardAllocation;
+  mapping(address => uint256) public override _bondRewardAllocation;
   uint256 public _totalNepPaired;
   mapping(address => mapping(address => uint256)) public _myNepRewards; // account --> bond token --> reward total
   address public _treasury;
@@ -63,66 +65,6 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
   }
 
   /**
-   * @dev Changes the treasury address
-   * @param treasury Provide new treasury address to change
-   */
-  function changeTreasury(address treasury) external onlyOwner {
-    require(treasury != address(0), "Invalid address");
-    require(treasury != _treasury, "Provide a new address");
-
-    emit TreasuryUpdated(_treasury, treasury);
-    _treasury = treasury;
-  }
-
-  /**
-   * @dev Adds or updates bond pairs for this pool
-   *
-   * @param token Provide the liquidity token address to bond with NEP
-   * @param pancakePair Provide the pair address of the liquidity token/NEP
-   * @param name Provide a name of this bond
-   * @param maxStake The maximum cap of total tokens that can be staked to create bond
-   * @param minBond Minimum bond amount
-   * @param entryFee Entry fee on one side-liquidity token
-   * @param exitFee Exit fee on both sides
-   * @param lockingPeriod The locking period for the liquidity token and reawds
-   * @param amount The amount of NEP tokens to transfer
-   *
-   */
-  function addOrUpdatePair(
-    address token,
-    IPancakePairLike pancakePair,
-    string memory name,
-    uint256 maxStake,
-    uint256 minBond,
-    uint256 entryFee,
-    uint256 exitFee,
-    uint256 lockingPeriod,
-    uint256 amount
-  ) public override onlyOwner {
-    require(token != address(0), "Invalid token");
-    require(maxStake > 0, "Invalid maximum stake amount");
-
-    if (amount > 0) {
-      _totalRewardAllocation = _totalRewardAllocation.add(amount);
-      _nepToken.safeTransferFrom(super._msgSender(), address(this), amount);
-    }
-
-    _pool[token].name = name;
-
-    if (address(pancakePair) != address(0)) {
-      _pool[token].pancakePair = pancakePair;
-    }
-
-    _pool[token].maxStake = maxStake;
-    _pool[token].minBond = minBond;
-    _pool[token].entryFee = entryFee;
-    _pool[token].exitFee = exitFee;
-    _pool[token].lockingPeriod = lockingPeriod;
-
-    emit PairUpdated(token, name, maxStake, minBond, entryFee, exitFee, lockingPeriod, amount);
-  }
-
-  /**
    * @dev Gets the amount of NEP required to create a bond with the supplied token and amount
    * @param tokenAddress The token to create bond with
    * @param amountIn The amount of token to supply
@@ -135,6 +77,8 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     uint256 nepBalance = token0 == tokenAddress ? reserve1 : reserve0;
 
     uint256 bondAmount = amountIn.mul(1000000 - _pool[tokenAddress].entryFee).div(1000000);
+
+    // slither-disable-next-line divide-before-multiply
     uint256 nepRequired = bondAmount.mul(nepBalance).div(tokenBalance);
 
     uint256[] memory amounts = new uint256[](2);
@@ -156,7 +100,7 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     address bondToken,
     uint256 bondTokenAmount,
     uint256 nepAmount
-  ) public view override returns (uint256 lockingPeriod, uint256 entryFee) {
+  ) external view override returns (uint256 lockingPeriod, uint256 entryFee) {
     require(bondToken != address(0), "Invalid token");
 
     Pair memory pair = _pool[bondToken];
@@ -219,9 +163,44 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
     _myNepRewards[super._msgSender()][bondToken] = _myNepRewards[super._msgSender()][bondToken].add(nepStaked);
 
     _pool[bondToken].totalLocked = _pool[bondToken].totalLocked.add(finalAmount);
-    _pool[bondToken].totalNepPaired = _pool[bondToken].totalNepPaired.add(_totalNepPaired);
+    _pool[bondToken].totalNepPaired = _pool[bondToken].totalNepPaired.add(nepStaked);
     _pool[bondToken].totalLiquidity = _pool[bondToken].totalLiquidity.add(liquidity);
 
+    emit BondCreated(bondToken, nepStaked, tokenStaked, liquidity);
+  }
+
+  function migrateLiquidity(
+    address beneficiary,
+    address bondToken,
+    uint256 nepStaked,
+    uint256 tokenStaked,
+    uint256 liquidity,
+    uint256 releaseDate,
+    bool migrationComplete
+  ) external onlyOwner {
+    require(_migrationComplete == false, "Migration already completed");
+
+    // First transfer the liquidity
+    IPancakePairLike pair = _pool[bondToken].pancakePair;
+
+    // slither-disable-next-line reentrancy-no-eth
+    require(pair.transferFrom(msg.sender, address(this), liquidity), "Could not transfer liquidity");
+
+    // Update the state
+    _bonds[beneficiary][bondToken].exitFee = _pool[bondToken].exitFee;
+    _bonds[beneficiary][bondToken].releaseDate = releaseDate;
+    _bonds[beneficiary][bondToken].nepAmount = _bonds[beneficiary][bondToken].nepAmount.add(nepStaked);
+    _bonds[beneficiary][bondToken].bondTokenAmount = _bonds[beneficiary][bondToken].bondTokenAmount.add(tokenStaked);
+    _bonds[beneficiary][bondToken].liquidity = _bonds[beneficiary][bondToken].liquidity.add(liquidity);
+
+    _totalNepPaired = _totalNepPaired.add(nepStaked);
+    _myNepRewards[beneficiary][bondToken] = _myNepRewards[beneficiary][bondToken].add(nepStaked);
+
+    _pool[bondToken].totalLocked = _pool[bondToken].totalLocked.add(tokenStaked);
+    _pool[bondToken].totalNepPaired = _pool[bondToken].totalNepPaired.add(nepStaked);
+    _pool[bondToken].totalLiquidity = _pool[bondToken].totalLiquidity.add(liquidity);
+
+    _migrationComplete = migrationComplete;
     emit BondCreated(bondToken, nepStaked, tokenStaked, liquidity);
   }
 
@@ -242,8 +221,76 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
   ) private {
     IERC20(bondToken).safeTransferFrom(super._msgSender(), address(this), bondTokenAmount);
 
-    _nepToken.approve(address(_pancakeRouter), nepAmount);
-    IERC20(bondToken).approve(address(_pancakeRouter), bondTokenAmount.sub(entryFee));
+    require(_nepToken.approve(address(_pancakeRouter), nepAmount), "NEP approval failed");
+    require(IERC20(bondToken).approve(address(_pancakeRouter), bondTokenAmount.sub(entryFee)), "Bond token approval failed");
+  }
+
+  /**
+   * @dev Finalizes and resets the bond release of the sender.
+   * @param bondToken Enter the bond liquidity token address.
+   */
+  function _finalize(address bondToken) private {
+    uint256 holdersLiquidity = _bonds[super._msgSender()][bondToken].liquidity;
+    uint256 totalLiquidity = _pool[bondToken].totalLiquidity;
+
+    _pool[bondToken].totalLiquidity = totalLiquidity.sub(holdersLiquidity);
+    _bonds[super._msgSender()][bondToken].releaseDate = 0;
+    _bonds[super._msgSender()][bondToken].nepAmount = 0;
+    _bonds[super._msgSender()][bondToken].bondTokenAmount = 0;
+    _bonds[super._msgSender()][bondToken].liquidity = 0;
+  }
+
+  /**
+   * @dev Removes and transfers all bond liquidity of the sender.
+   * Liquidity means the original bond token amount, minus fees, plus NEP token rewards, plus PancakeSwap LP fees.
+   *
+   * @param bondToken Provide the address of the bond token to release to the sender.
+   */
+  function _releaseBondToSender(address bondToken) private {
+    uint256 liquidity = _bonds[super._msgSender()][bondToken].liquidity;
+
+    _finalize(bondToken);
+
+    require(_pool[bondToken].pancakePair.transfer(super._msgSender(), liquidity), "Bond release failed");
+    emit BondReleased(bondToken, liquidity);
+  }
+
+  /**
+   * @dev Removes and transfers all bond liquidity of the sender, deducting fees.
+   * Liquidity means the original bond token amount, minus fees, plus NEP token rewards, plus PancakeSwap LP fees.
+   *
+   * @param bondToken Provide the address of the bond token to release to the sender.
+   */
+  function _releaseBondToSenderDeductingFees(address bondToken, uint256 exitFee) private {
+    uint256 liquidity = _bonds[super._msgSender()][bondToken].liquidity;
+    uint256 fees = liquidity.mul(1000000 - exitFee).div(1000000);
+    uint256 released = liquidity.sub(fees);
+
+    _finalize(bondToken);
+
+    if (released > 0) {
+      require(_pool[bondToken].pancakePair.transfer(super._msgSender(), released), "Release bond failed");
+    }
+
+    // Transfer the exit fee to the treasury
+    if (fees > 0) {
+      require(_pool[bondToken].pancakePair.transfer(_treasury, fees), "Transfer to treasury failed");
+    }
+
+    emit BondReleased(bondToken, _bonds[super._msgSender()][bondToken].liquidity);
+  }
+
+  /**
+   * @dev Entrypoint to release the bond held by the sender.
+   * @param bondToken Enter the bond liquidity token address.
+   */
+  function releaseBond(address bondToken) external override whenNotPaused nonReentrant {
+    require(block.timestamp >= _bonds[super._msgSender()][bondToken].releaseDate, "You're early."); // solhint-disable-line
+    require(_bonds[super._msgSender()][bondToken].liquidity > 0, "Nothing to withdraw");
+
+    uint256 exitFee = _bonds[super._msgSender()][bondToken].exitFee;
+
+    exitFee == 0 ? _releaseBondToSender(bondToken) : _releaseBondToSenderDeductingFees(bondToken, exitFee);
   }
 
   /**
@@ -277,68 +324,81 @@ contract BondPool is IBondPool, ReentrancyGuard, Recoverable, Pausable {
   }
 
   /**
-   * @dev Finalizes and resets the bond release of the sender.
-   * @param bondToken Enter the bond liquidity token address.
+   * @dev Changes the treasury address
+   * @param treasury Provide new treasury address to change
    */
-  function _finalize(address bondToken) private {
-    uint256 holdersLiquidity = _bonds[super._msgSender()][bondToken].liquidity;
-    uint256 totalLiquidity = _pool[bondToken].totalLiquidity;
+  function changeTreasury(address treasury) external onlyOwner {
+    require(treasury != address(0), "Invalid address");
+    require(treasury != _treasury, "Provide a new address");
 
-    _pool[bondToken].totalLiquidity = totalLiquidity.sub(holdersLiquidity);
-    _bonds[super._msgSender()][bondToken].releaseDate = 0;
-    _bonds[super._msgSender()][bondToken].nepAmount = 0;
-    _bonds[super._msgSender()][bondToken].bondTokenAmount = 0;
-    _bonds[super._msgSender()][bondToken].liquidity = 0;
+    emit TreasuryUpdated(_treasury, treasury);
+    _treasury = treasury;
   }
 
   /**
-   * @dev Removes and transfers all bond liquidity of the sender.
-   * Liquidity means the original bond token amount, minus fees, plus NEP token rewards, plus PancakeSwap LP fees.
-   *
-   * @param bondToken Provide the address of the bond token to release to the sender.
+   * @dev Changes the NEP Token address
+   * @param nepToken Provide new NEP token address to change
    */
-  function _releaseBondToSender(address bondToken) private {
-    uint256 liquidity = _bonds[super._msgSender()][bondToken].liquidity;
-
-    _pool[bondToken].pancakePair.transfer(super._msgSender(), liquidity);
-    emit BondReleased(bondToken, liquidity);
+  function changeNEPToken(address nepToken) external onlyOwner {
+    _nepToken = IERC20(nepToken);
   }
 
   /**
-   * @dev Removes and transfers all bond liquidity of the sender, deducting fees.
-   * Liquidity means the original bond token amount, minus fees, plus NEP token rewards, plus PancakeSwap LP fees.
-   *
-   * @param bondToken Provide the address of the bond token to release to the sender.
+   * @dev Changes the PancakeRouter address
+   * @param pancakeRouter Provide new PancakeRouter address to change
    */
-  function _releaseBondToSenderDeductingFees(address bondToken, uint256 exitFee) private {
-    uint256 liquidity = _bonds[super._msgSender()][bondToken].liquidity;
-    uint256 fees = liquidity.mul(1000000 - exitFee).div(1000000);
-    uint256 released = liquidity.sub(fees);
+  function changePancakeRouter(address pancakeRouter) external onlyOwner {
+    _pancakeRouter = IPancakeRouterLike(pancakeRouter);
+  }
 
-    if (released > 0) {
-      _pool[bondToken].pancakePair.transfer(super._msgSender(), released);
+  /**
+   * @dev Adds or updates bond pairs for this pool
+   *
+   * @param token Provide the liquidity token address to bond with NEP
+   * @param pancakePair Provide the pair address of the liquidity token/NEP
+   * @param name Provide a name of this bond
+   * @param maxStake The maximum cap of total tokens that can be staked to create bond
+   * @param minBond Minimum bond amount
+   * @param entryFee Entry fee on one side-liquidity token
+   * @param exitFee Exit fee on both sides
+   * @param lockingPeriod The locking period for the liquidity token and reawds
+   * @param amount The amount of NEP tokens to transfer
+   *
+   */
+  function addOrUpdatePair(
+    address token,
+    IPancakePairLike pancakePair,
+    string memory name,
+    uint256 maxStake,
+    uint256 minBond,
+    uint256 entryFee,
+    uint256 exitFee,
+    uint256 lockingPeriod,
+    uint256 amount
+  ) external override onlyOwner {
+    require(token != address(0), "Invalid token");
+    require(maxStake > 0, "Invalid maximum stake amount");
+
+    if (amount > 0) {
+      _totalRewardAllocation = _totalRewardAllocation.add(amount);
+      _bondRewardAllocation[token] = _bondRewardAllocation[token].add(amount);
+
+      _nepToken.safeTransferFrom(super._msgSender(), address(this), amount);
     }
 
-    // Transfer the exit fee to the treasury
-    if (fees > 0) {
-      _pool[bondToken].pancakePair.transfer(_treasury, fees);
+    _pool[token].name = name;
+
+    if (address(pancakePair) != address(0)) {
+      _pool[token].pancakePair = pancakePair;
     }
 
-    emit BondReleased(bondToken, _bonds[super._msgSender()][bondToken].liquidity);
-  }
+    _pool[token].maxStake = maxStake;
+    _pool[token].minBond = minBond;
+    _pool[token].entryFee = entryFee;
+    _pool[token].exitFee = exitFee;
+    _pool[token].lockingPeriod = lockingPeriod;
 
-  /**
-   * @dev Entrypoint to release the bond held by the sender.
-   * @param bondToken Enter the bond liquidity token address.
-   */
-  function releaseBond(address bondToken) external override whenNotPaused nonReentrant {
-    require(block.timestamp >= _bonds[super._msgSender()][bondToken].releaseDate, "You're early."); // solhint-disable-line
-    require(_bonds[super._msgSender()][bondToken].liquidity > 0, "Nothing to withdraw");
-
-    uint256 exitFee = _bonds[super._msgSender()][bondToken].exitFee;
-
-    exitFee == 0 ? _releaseBondToSender(bondToken) : _releaseBondToSenderDeductingFees(bondToken, exitFee);
-    _finalize(bondToken);
+    emit PairUpdated(token, name, maxStake, minBond, entryFee, exitFee, lockingPeriod, amount);
   }
 
   function pause() external onlyOwner whenNotPaused {
