@@ -34,6 +34,12 @@ interface IBondPool {
   function _totalRewardAllocation() external view returns (uint256);
 
   /**
+   * @dev Gets the total number of NEP allocated to be distributed as reward for a given bond token
+   * @param token Enter the address of the token to get the allocation
+   */
+  function _bondRewardAllocation(address token) external view returns (uint256);
+
+  /**
    * @dev Gets the bond market information information
    * @param token The token address to get the information
    * @param account Enter your account address to get the information
